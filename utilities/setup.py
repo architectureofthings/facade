@@ -211,7 +211,8 @@ def create_repos(reset=0):
 		"name VARCHAR(256),"
 		"added TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP(6),"
 		"status VARCHAR(32) NOT NULL,"
-		"working_commit VARCHAR(40))")
+		"working_commit VARCHAR(40),"
+		"virtual_id INT UNSIGNED NOT NULL DEFAULT 0)")
 
 	cursor.execute(create)
 	db.commit()

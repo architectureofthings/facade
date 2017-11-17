@@ -51,7 +51,7 @@ global log_level
 # Important: Do not modify the database number unless you've also added an
 # update clause to update_db!
 
-upstream_db = 3
+upstream_db = 4
 
 #### Database update functions ####
 
@@ -102,6 +102,15 @@ def update_db(version):
 		db.commit
 
 		increment_db(3)
+
+	if version < 4:
+		add_results_setting = ("ALTER TABLE repos ADD COLUMN "
+			"virtual_id INT UNSIGNED NOT NULL DEFAULT 0")
+		cursor.execute(add_results_setting)
+		db.commit
+
+		increment_db(4)
+
 
 	print "No further database updates.\n"
 
@@ -553,19 +562,29 @@ def git_repo_cleanup():
 
 	repo_base_directory = get_setting('repo_directory')
 
-	query = "SELECT id,projects_id,path,name FROM repos WHERE status='Delete'"
+	query = "SELECT id,virtual_id,projects_id,git,path,name FROM repos WHERE status='Delete'"
 	cursor.execute(query)
 
 	delete_repos = list(cursor)
 
 	for row in delete_repos:
 
-		# Remove the files on disk
+		if git == 'virtual':
 
-		cmd = ("rm -rf %s%s/%s%s"
-			% (repo_base_directory,row['projects_id'],row['path'],row['name']))
+			# Remove references from real repositories if it's virtual
 
-		return_code = subprocess.Popen([cmd],shell=True).wait()
+			remove_refs = ("UPDATE repos SET virtual_id = 0 "
+				"WHERE virtual_id = %s")
+			cursor.execute(remove_refs,(row['id'], ))
+			db.commit()
+
+		else:
+
+			# Remove files on disk if it's a real repository
+			cmd = ("rm -rf %s%s/%s%s"
+				% (repo_base_directory,row['projects_id'],row['path'],row['name']))
+
+			return_code = subprocess.Popen([cmd],shell=True).wait()
 
 		# Remove cached repo data
 
