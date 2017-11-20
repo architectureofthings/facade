@@ -621,25 +621,28 @@ def git_repo_cleanup():
 		db.commit()
 
 		# Attempt to cleanup any empty parent directories
-		while (cleanup.find('/',0) > 0):
-			cleanup = cleanup[:cleanup.rfind('/',0)]
 
-			cmd = "rmdir %s%s" % (repo_base_directory,cleanup)
-			subprocess.Popen([cmd],shell=True).wait()
-			log_activity('Verbose','Attempted %s' % cmd)
+		if git != 'virtual':
+			while (cleanup.find('/',0) > 0):
+				cleanup = cleanup[:cleanup.rfind('/',0)]
+
+				cmd = "rmdir %s%s" % (repo_base_directory,cleanup)
+				subprocess.Popen([cmd],shell=True).wait()
+				log_activity('Verbose','Attempted %s' % cmd)
 
 		update_repo_log(row['id'],'Deleted')
 
 	log_activity('Info','Processing deletions (complete)')
 
-def git_repo_initialize():
+def git_repo_initialize_real():
 
 # Select any new git repos so we can set up their locations and git clone
 
 	update_status('Fetching new repos')
 	log_activity('Info','Fetching new repos')
 
-	query = "SELECT id,projects_id,git FROM repos WHERE status LIKE 'New%'";
+	query = ("SELECT id,projects_id,git FROM repos WHERE status LIKE 'New%' "
+		"AND git != 'virtual'")
 	cursor.execute(query)
 
 	new_repos = list(cursor)
@@ -747,6 +750,60 @@ def git_repo_initialize():
 			log_activity('Error','Could not clone %s' % git)
 
 	log_activity('Info', 'Fetching new repos (complete)')
+
+def git_repo_initialize_virtual():
+
+# Process any new virtual repos. Existing real repo info needs to be removed
+# from analysis_data and the caches and rebuilt under the new, single virtual
+# repo. This avoids double counting.
+
+	update_status('Initializing new virtual repos')
+	log_activity('Info','Initializing new virtual repos')
+
+	get_new_virtual_repos = ("SELECT id,projects_id,git FROM repos WHERE status LIKE 'New%' "
+		"AND git = 'virtual'")
+	cursor.execute(get_new_virtual_repos)
+
+	new_repos = list(cursor)
+
+	for new_repo in new_repos:
+
+		# Remove cached data for the real repos, so it can be repopulated with
+		# the virtual repo.
+
+		get_real_repos = ("SELECT id FROM repos WHERE virtual_id = %s")
+		cursor.execute(get_real_repos, (new_repo, ))
+
+		real_repos = list(cursor)
+
+		for real_repo in real_repos:
+
+			# Remove cached repo data
+
+			remove_repo_monthly_cache = "DELETE FROM repo_monthly_cache WHERE repos_id=%s"
+			cursor.execute(remove_repo_monthly_cache, (real_repo['id'], ))
+			db.commit()
+
+			remove_repo_annual_cache = "DELETE FROM repo_annual_cache WHERE repos_id=%s"
+			cursor.execute(remove_repo_annual_cache, (real_repo['id'], ))
+			db.commit()
+
+			# Set project to be recached
+
+			set_project_recache = ("UPDATE projects SET recache=TRUE "
+				"WHERE id=%s")
+			cursor.execute(set_project_recache,(real_repo['projects_id'], ))
+			db.commit()
+
+			# Remove analysis data
+
+			remove_analysis_data = ("DELETE FROM analysis_data WHERE "
+				"repos_id = %s")
+			cursor.execute(remove_analysis_data, (real_repo['id'], ))
+			db.commit()
+
+
+	log_activity('Info','Initializing new virtual repos (complete)')
 
 def check_for_repo_updates():
 
@@ -1457,6 +1514,7 @@ limited_run = 0
 delete_marked_repos = 0
 pull_repos = 0
 clone_repos = 0
+create_virtual = 0
 check_updates = 0
 force_updates = 0
 run_analysis = 0
@@ -1467,7 +1525,7 @@ rebuild_caches = 0
 force_invalidate_caches = 0
 create_xlsx_summary_files = 0
 
-opts,args = getopt.getopt(sys.argv[1:],'hdpcuUanfIrx')
+opts,args = getopt.getopt(sys.argv[1:],'hdpcvuUanfIrx')
 for opt in opts:
 	if opt[0] == '-h':
 		print("\nfacade-worker.py does everything by default except invalidating caches\n"
@@ -1476,6 +1534,7 @@ for opt in opts:
 				"Options:\n"
 				"	-d	Delete marked repos\n"
 				"	-c	Run 'git clone' on new repos\n"
+				"	-v	Create virtual repositories\n"
 				"	-u	Check if any repos should be marked for updating\n"
 				"	-U	Force all repos to be marked for updating\n"
 				"	-p	Run 'git pull' on repos\n"
@@ -1496,6 +1555,11 @@ for opt in opts:
 		clone_repos = 1
 		limited_run = 1
 		log_activity('Info','Option set: clone new repos.')
+
+	elif opt[0] == '-v':
+		create_virtual = 1
+		limited_run = 1
+		log_activity('Info','Option set: create virtual repos.')
 
 	elif opt[0] == '-u':
 		check_updates = 1
@@ -1566,7 +1630,10 @@ if not limited_run or (limited_run and delete_marked_repos):
 	git_repo_cleanup()
 
 if not limited_run or (limited_run and clone_repos):
-	git_repo_initialize()
+	git_repo_initialize_real()
+
+if not limited_run or (limited_run and create_virtual):
+	git_repo_initialize_virtual()
 
 if not limited_run or (limited_run and check_updates):
 	check_for_repo_updates()
